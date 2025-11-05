@@ -1,4 +1,4 @@
-# CausalUncertaintyModel
+# Causal Uncertainty Model
 
 **Python implementation of the Bayesian causal uncertainty agent from:**
 
@@ -24,3 +24,4 @@ Lee SW, O’Doherty JP, Shimojo S (2015) PLoS Biol 13(4): e1002137.
 ---
 
 For support, extensions, or fitting guidance: [sujinan@kaist.ac.kr]
+```
