@@ -314,3 +314,5 @@ For questions about:
 - **MATLAB experiment**: See the detailed README in `Causal inference task/`
 - **Experimental protocol**: See `Causal inference task/Instruction.pdf`
 - **Original paper**: Lee et al. (2015) PLoS Biology
+
+**Contact:** sujinan@kaist.ac.kr
