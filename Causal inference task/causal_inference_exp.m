@@ -1,163 +1,337 @@
 % causal_inference_exp.m
-% This script is designed to simulate a causal inference experiment using Psychtoolbox.
-% It presents visual stimuli, records participant responses, and saves the data for each session.
-% The experiment can operate in different modes ('pre' or 'main') and is suitable for multiple sessions.
+% ============================================================================
+% Main experimental script for the causal inference one-shot learning paradigm
+% based on Lee et al. (2015). This script presents visual stimuli, records
+% participant responses, and manages multi-session experimental protocols.
+%
+% The experiment implements a visual-causal learning task where participants:
+% 1. View cue stimuli with varying novelty levels
+% 2. Receive reward feedback
+% 3. Provide hedonic ratings (how pleasant/unpleasant)
+% 4. Provide causal attribution ratings (which cue caused the outcome)
+% 5. Complete Bayesian betting task (triangular probability distribution)
+%
+% Experimental Structure:
+%   - Multiple sessions (up to 5)
+%   - Each session: 8 blocks (2 blocks for 'pre' sessions)
+%   - Each block: 5 trials
+%   - Each trial: 5 cue presentations + 1 reward
+%   - Each block: 3 images (2 common, 1 novel)
+%
+% Citation:
+%   Lee SW, O'Doherty JP, Shimojo S (2015) Neural Computations Mediating
+%   One-Shot Learning in the Human Brain. PLoS Biology, 13(4): e1002137.
+%
+% Dependencies:
+%   - Psychtoolbox-3 (http://psychtoolbox.org/)
+%   - MATLAB R2014b or later
+%   - Seed images in ./seed/ directory
+%   - event_random.m or given_event_made.m (called automatically)
+%
+% ============================================================================
 
 function [output_info]=causal_inference_exp(EXP_NAME,index_num,session_opt)
-% Parameters:
-% EXP_NAME : string - Identifier for the experiment name, e.g., 'test'.
-% index_num : integer - Current session number, used to handle session-specific actions.
-% session_opt : string - Sesscausal_inference_expion type, either 'pre' for preliminary or 'main' for primary experiment sessions.
+% ============================================================================
+% Function: causal_inference_exp
+%
+% Inputs:
+%   EXP_NAME   - String identifier for the experiment (e.g., 'test', 'subj001')
+%   index_num  - Integer current session number (1-5)
+%   session_opt - String session type:
+%                 'pre'  - Preliminary/practice session (2 blocks, longer time limits)
+%                 'main' - Main experimental session (8 blocks, normal timing)
+%
+% Outputs:
+%   output_info - Integer return code (1 = success)
+%
+% Files Created:
+%   - results_save/{EXP_NAME}_main_{index_num}.mat (or _pre_{index_num}.mat)
+%   - results_save/{EXP_NAME}_image_usage_info.mat
+%   - results_save/{EXP_NAME}_task_schedule_session{index_num}.mat
+%
+% ============================================================================
 
-% Session initialization based on session index number
+%% ========================================================================
+%% SECTION 1: SESSION INITIALIZATION AND SCHEDULE GENERATION
+%% ========================================================================
+% Generate or load experimental schedule based on session number
+% First session uses random schedule, subsequent sessions use progressive
+% schedules based on previous session data
+
 if index_num==1
-    event_random(EXP_NAME, index_num); % Run random event setup for the first session
+    % First session: Generate completely random stimulus and reward schedule
+    event_random(EXP_NAME, index_num);
 else
-    given_event_made(EXP_NAME, index_num); % Load preset events for subsequent sessions
+    % Subsequent sessions: Generate schedule based on previous session results
+    % This enables adaptive/progressive experimental designs
+    given_event_made(EXP_NAME, index_num);
 end
 
-% Disable sync tests in Psychtoolbox for debugging
+%% ========================================================================
+%% SECTION 2: PSYCHTOOLBOX SETUP AND VALIDATION
+%% ========================================================================
+
+% Disable sync tests in Psychtoolbox for debugging (remove in production)
+% This skips screen synchronization tests which can cause delays
 Screen('Preference', 'SkipSyncTests', 1);
 
-% Validate the session option input, raising an error for invalid values
+% Validate session option input
 if strcmp(session_opt, 'pre') || strcmp(session_opt, 'main')
     okay_to_start = 1; % Proceed if session type is valid
 else
     error('ERROR: Invalid session_opt. Use "pre" or "main" only.');
 end
 
-% Set up paths for seed files and saving results
-seed_path = fullfile(pwd, 'seed'); % Path to load experimental seeds
-save_path = fullfile(pwd, 'results_save'); % Directory for saving results
+%% ========================================================================
+%% SECTION 3: FILE PATH CONFIGURATION
+%% ========================================================================
 
+% Set up paths for seed files and saving results
+seed_path = fullfile(pwd, 'seed');        % Path to load experimental seed images
+save_path = fullfile(pwd, 'results_save'); % Directory for saving all results
+
+% Ensure results_save directory exists
+if ~exist(save_path, 'dir')
+    mkdir(save_path);
+end
+
+%% ========================================================================
+%% SECTION 4: SESSION FILE VALIDATION
+%% ========================================================================
 % Check for file conflicts and ensure previous session file exists for continuity
+
+% Check if current session file already exists (prevent overwriting)
 file_chk_name = fullfile(save_path, sprintf('%s_main_%d.mat', EXP_NAME, index_num));
 if exist(file_chk_name, 'file')
     disp('ERROR: Session file already exists. Try another session name or number.');
     return;
-elseif index_num > 1
+end
+
+% For sessions after the first, verify previous session completed
+if index_num > 1
     previous_file = fullfile(save_path, sprintf('%s_main_%d.mat', EXP_NAME, index_num - 1));
     if ~exist(previous_file, 'file')
         disp('ERROR: Previous session file missing. Check previous session number.');
         return;
     end
-elseif index_num > 5
+end
+
+% Enforce maximum session limit
+if index_num > 5
     disp('ERROR: Maximum session limit of 5 exceeded.');
     return;
 end
 
-% Core options: resolution, image size, and display parameters
-KEEP_PICTURE_OPT=1; % keepting picture + bonus session
-SCREEN_RESOLUTION=[1920 1080];%[1920 1200];
-IMAGE_SIZE=[256 256]; %width,height - for cue presentation
-IMAGE_SIZE_Q_outcome = [1377 121];
-IMAGE_SIZE_Q_hedonic = [839 111];
-rating_size = [1514 169];
-disp_scale=1.5; % for cue presentation
-disp_scale_causalrating=1.0; % cues size for hedonic and causal attribution ratings
-disp_scale_keepingpicture=0.55; % cue size for ratings for keeping pictures
-size_triangle=110; % the size of triangle for keeping pictures
-IMAGE_type1 = [1378 213];
+%% ========================================================================
+%% SECTION 5: DISPLAY AND IMAGE PARAMETERS
+%% ========================================================================
+% Configure screen resolution, image sizes, and display scaling factors
 
-% Timing and session-specific parameters
-Tot_session=1; % # of total sessions (fixed because this runs for each session)
-Tot_block=8; % # of total blocks (must be EVEN number)
-if(strcmp(session_opt,'pre')==1) % pre-session
+KEEP_PICTURE_OPT=1; % Enable bonus "keeping picture" task (triangular betting)
+SCREEN_RESOLUTION=[1920 1080]; % Screen resolution [width, height] in pixels
+
+% Image dimensions for different display contexts
+IMAGE_SIZE=[256 256];              % Cue presentation size [width, height]
+IMAGE_SIZE_Q_outcome = [1377 121];  % Outcome question image size
+IMAGE_SIZE_Q_hedonic = [839 111];   % Hedonic question image size
+rating_size = [1514 169];           % Rating scale image size
+IMAGE_type1 = [1378 213];           % Bonus task instruction image size
+
+% Display scaling factors (multipliers for image sizes)
+disp_scale=1.5;                     % Cue presentation scale
+disp_scale_causalrating=1.0;        % Scale for hedonic/causal rating cues
+disp_scale_keepingpicture=0.55;     % Scale for bonus task cues
+size_triangle=110;                  % Size of triangular betting interface (pixels)
+
+%% ========================================================================
+%% SECTION 6: EXPERIMENTAL STRUCTURE PARAMETERS
+%% ========================================================================
+% Define the hierarchical structure of the experiment
+
+Tot_session=1; % Number of sessions (this script runs once per session)
+Tot_block=8;   % Number of blocks per session (must be EVEN number for counterbalancing)
+if(strcmp(session_opt,'pre')==1) % Pre-session uses fewer blocks
     Tot_block=2;
 end
-Tot_trial=5; % # of trials in each block
-Tot_trial_s=5; % # of cue presentation in one trial [NOTE] Tot_trial*Tot_trial_s must be *even* number
-tot_num_img_per_block=3;
+Tot_trial=5;        % Number of trials per block
+Tot_trial_s=5;      % Number of cue presentations per trial
+                    % NOTE: Tot_trial*Tot_trial_s must be EVEN number
+tot_num_img_per_block=3; % Number of images per block (2 common + 1 novel)
 
-ffw_speed=1; %1 % fast forward speed, 1: normal speed
-if(strcmp(session_opt,'pre')==1) % pre-session
-    ffw_speed=4; %4
+%% ========================================================================
+%% SECTION 7: TIMING PARAMETERS
+%% ========================================================================
+% All timing values in seconds. Pre-sessions use longer time limits for practice.
+
+% Fast-forward speed multiplier (for testing/debugging)
+ffw_speed=1; % Normal speed (1 = real-time)
+if(strcmp(session_opt,'pre')==1) % Pre-session uses faster timing for practice
+    ffw_speed=4; % 4x speed for practice sessions
 end
 
-% Set timing values for each component in seconds, adjusted for fast-forward speed
-sec_scanner_ready=5/ffw_speed; % sec for scanner stabilization
-sec_block_ready=0.5/ffw_speed; % sec for block ready signal
-sec_stim_display=0.7/ffw_speed;
-sec_stim_interval=[0.2 0.3]/(ffw_speed);%1.5; %(sec)
-sec_trial_interval=[1 2]/(ffw_speed);%1.5; %(sec)
-sec_limit_Q_rating=[7 7]; % time limit of [hedonic_rating causal_rating] (sec)
-sec_limit_Bayesian_rating=8; % time limit of Bayesian triangular rating(sec)
-sec_jittered_blank_page=0.15/(ffw_speed); % (sec)
-if(strcmp(session_opt,'pre')==1) % pre-session
-    sec_limit_Q_rating=[10 10]; % time limit of [hedonic_rating causal_rating] (sec)
-    sec_limit_Bayesian_rating=20; % time limit of Bayesian triangular rating(sec)
+% Timing durations (adjusted by fast-forward speed)
+sec_scanner_ready=5/ffw_speed;              % Scanner stabilization wait time
+sec_block_ready=0.5/ffw_speed;              % Block start message display time
+sec_stim_display=0.7/ffw_speed;             % Individual cue presentation duration
+sec_stim_interval=[0.2 0.3]/(ffw_speed);    % Jittered interval between cues [min, max]
+sec_trial_interval=[1 2]/(ffw_speed);       % Jittered interval between trials [min, max]
+sec_limit_Q_rating=[7 7];                   % Time limits: [hedonic_rating, causal_rating] (sec)
+sec_limit_Bayesian_rating=8;                % Time limit for triangular betting task (sec)
+sec_jittered_blank_page=0.15/(ffw_speed);   % Brief blank screen between ratings (sec)
+
+% Extended time limits for pre-sessions (practice mode)
+if(strcmp(session_opt,'pre')==1)
+    sec_limit_Q_rating=[10 10];      % Longer limits for practice
+    sec_limit_Bayesian_rating=20;    % Extended time for triangular task
 end
 
-earliest_novel_stimulus_show_in_block=0.6; % 0: any trial in block, 1: last?
-earliest_reward_stimulus_show_in_block=0.6; % 0: any trial in block, 1: last?. must be in [reward_prob] range.
-sec_reward_display=2/ffw_speed;
-% how_early_novel_stimulus_show_in_trial=1; % 0: shown at 1-st trial, 1: any trial in block.
-latest_novel_stimulus_show_in_trial_s=0.6; % 0: shown at 1-st trial_s, 1: any trial_s in trial.
+%% ========================================================================
+%% SECTION 8: STIMULUS AND REWARD TIMING CONSTRAINTS
+%% ========================================================================
+% Control when novel stimuli and rewards appear within blocks/trials
 
-% reward [neg rwd, pos rwd]
-reward_mag=[[-50 10];[50 -10]]; % col1: novel outcome, col2: non-novel outcome, # of rows = # of outcome conditions
-reward_prob=[0.25 0.75]; % must be 2nd col>1st colyy
+earliest_novel_stimulus_show_in_block=0.6;  % Earliest position for novel stimulus
+                                            % 0 = any trial, 1 = last trial only
+earliest_reward_stimulus_show_in_block=0.6; % Earliest position for reward delivery
+                                            % Must be within reward_prob range
+sec_reward_display=2/ffw_speed;             % Duration of reward message display
+latest_novel_stimulus_show_in_trial_s=0.6;  % Latest position within trial
+                                            % 0 = first cue, 1 = any cue position
 
-% money
-money_given=1; % point
-% novelty-level for the non-novel stimuli. a novel stimulus will be shown only one time.
-img_present_ratio=[2 1]; % novelty level :: size = tot_num_img_per_block-1.
-%% options: display
-% questions
-Q{1,1}.color=[0, 0, 255, 255];
-Q{1,1}.cursor_input=[-5:1:5];
-Q{1,2}.text2='(Not at all)';
-Q{1,2}.text3='(Very likely)';
-Q{1,2}.text4='(Don''t know)';
-Q{1,2}.color=[255, 0, 0, 255];
-Q{1,2}.color_1=[0, 0, 255, 255];
-Q{1,2}.cursor_input=[0:1:10];
+%% ========================================================================
+%% SECTION 9: REWARD PARAMETERS
+%% ========================================================================
+% Define reward magnitudes and probabilities for different outcome conditions
 
-% text size
-text_size_default=20; % font size (don't change)
-text_size_reward=400; % height in pixel
+% Reward magnitude matrix: [novel_outcome, non_novel_outcome] for each condition
+% Row 1: Condition 1 - Novel gets -50, Non-novel gets +10
+% Row 2: Condition 2 - Novel gets +50, Non-novel gets -10
+reward_mag=[[-50 10];[50 -10]];
 
-% background color
-BackgroundColor_block_intro=[130,130,130,150]; % gray
-BackgroundColor_Cue_page=[210,210,210,150]; % light gray
-BackgroundColor_Trial_ready_page=[210,210,210,150]; % light gray
-BackgroundColor_Reward_page=[210,210,210,150]; % light gray
-COLOR_FIXATION_MARK=[70,70,70,200]; % dark gray
-% automatically determined
-total_bet_trial=nchoosek(tot_num_img_per_block,3);
-list_combination=randperm(tot_num_img_per_block);
+% Reward probability: [P(negative), P(positive)]
+% Must satisfy: reward_prob(2) > reward_prob(1)
+reward_prob=[0.25 0.75]; % 25% negative, 75% positive outcomes
+
+%% ========================================================================
+%% SECTION 10: STIMULUS NOVELTY PARAMETERS
+%% ========================================================================
+% Configure stimulus presentation ratios and betting parameters
+
+money_given=1;              % Base monetary unit for betting task (points)
+img_present_ratio=[2 1];    % Presentation frequency ratio for non-novel stimuli
+                            % [level1_ratio, level2_ratio]
+                            % Novel stimulus (level 3) appears only once per block
+%% ========================================================================
+%% SECTION 11: RATING QUESTION CONFIGURATION
+%% ========================================================================
+% Define parameters for hedonic and causal attribution rating scales
+
+% Question 1: Hedonic rating (how pleasant/unpleasant)
+Q{1,1}.color=[0, 0, 255, 255];        % Blue color for scale
+Q{1,1}.cursor_input=[-5:1:5];         % Rating scale: -5 to +5 (11 points)
+
+% Question 2: Causal attribution rating (which cue caused the outcome)
+Q{1,2}.text2='(Not at all)';          % Left anchor text
+Q{1,2}.text3='(Very likely)';         % Right anchor text
+Q{1,2}.text4='(Don''t know)';         % Middle/neutral option text
+Q{1,2}.color=[255, 0, 0, 255];        % Red color for negative outcome question
+Q{1,2}.color_1=[0, 0, 255, 255];      % Blue color for positive outcome question
+Q{1,2}.cursor_input=[0:1:10];         % Rating scale: 0 to 10 (11 points)
+
+%% ========================================================================
+%% SECTION 12: DISPLAY STYLING PARAMETERS
+%% ========================================================================
+
+% Text sizes
+text_size_default=20;      % Default font size for text (don't change)
+text_size_reward=400;      % Reward message text height in pixels
+
+% Background colors (RGBA format: [R, G, B, Alpha])
+BackgroundColor_block_intro=[130,130,130,150];      % Gray for block intro
+BackgroundColor_Cue_page=[210,210,210,150];         % Light gray for cue display
+BackgroundColor_Trial_ready_page=[210,210,210,150]; % Light gray for trial ready
+BackgroundColor_Reward_page=[210,210,210,150];     % Light gray for reward display
+COLOR_FIXATION_MARK=[70,70,70,200];                 % Dark gray for fixation cross
+
+%% ========================================================================
+%% SECTION 13: BONUS TASK COMBINATIONS
+%% ========================================================================
+% Generate all possible combinations of 3 images from tot_num_img_per_block
+% for the triangular betting task
+
+total_bet_trial=nchoosek(tot_num_img_per_block,3); % Number of 3-image combinations
+list_combination=randperm(tot_num_img_per_block);   % Random permutation for display order
 
 
-% key code (laptop)
-KEY_L=37;
-KEY_R=39;
-KEY_Y=89; %'y'
-KEY_N=78; %'n'
-KEY_Q=81; %'q'
-KEY_K=KbName('k'); % k
-KEY_T=84; % 't', 5 in desktop, 84 in laptop
+%% ========================================================================
+%% SECTION 14: KEYBOARD INPUT CODES
+%% ========================================================================
+% Define key codes for participant responses (laptop keyboard layout)
 
-% recording variables (for each block)
-HIST_bet_score_table_type1=cell(Tot_block,size(list_combination,1));
-HIST_bet_money_table_type1=cell(Tot_block,size(list_combination,1));
-HIST_Barycentric_coord_table_type1=cell(Tot_block,size(list_combination,1));
-HIST_bet_score_table_type2=cell(Tot_block,size(Q,2));
+KEY_L=37;              % Left arrow key (move cursor left)
+KEY_R=39;              % Right arrow key (move cursor right)
+KEY_Y=89;              % 'y' key (confirm/yes)
+KEY_N=78;              % 'n' key (no/reset)
+KEY_Q=81;              % 'q' key (quit/abort)
+KEY_K=KbName('k');     % 'k' key (skip to rating phase)
+KEY_T=84;              % 't' key (varies by keyboard: 5 on desktop, 84 on laptop)
 
+%% ========================================================================
+%% SECTION 15: DATA RECORDING VARIABLES INITIALIZATION
+%% ========================================================================
+% Preallocate cell arrays to store all experimental data
+
+% Type 1: Triangular betting task data (bonus round)
+HIST_bet_score_table_type1=cell(Tot_block,size(list_combination,1));      % Betting scores
+HIST_bet_money_table_type1=cell(Tot_block,size(list_combination,1));    % Monetary bets
+HIST_Barycentric_coord_table_type1=cell(Tot_block,size(list_combination,1)); % Barycentric coordinates
+
+% Type 2: Linear rating scale data (hedonic and causal ratings)
+HIST_bet_score_table_type2=cell(Tot_block,size(Q,2)); % Ratings for each question type
+
+% Bonus session data (if applicable)
 HIST_bet_score_table_type1_bonus=cell(1,size(list_combination,1));
 HIST_bet_money_table_type1_bonus=cell(1,size(list_combination,1));
 HIST_Barycentric_coord_table_type1_bonus=cell(1,size(list_combination,1));
 HIST_bet_score_table_type2_bonus=cell(1,size(Q,2));
 
-HIST_event_info0=[]; % row1=event time(in session), row2=event time(in block), row3=event type
-HIST_event_info_Tag{1,1}='row1 - block#';    HIST_event_info_Tag{2,1}='row2 - trial#, 0 if outside of the trial';     HIST_event_info_Tag{3,1}='row3 - trial_s#, 0 if outside of the trial_s';
-HIST_event_info_Tag{4,1}='row4 - event time in session';   HIST_event_info_Tag{5,1}='row5 - event time in block';
-HIST_event_info_Tag{6,1}='row6 - 0.5: block start msg on, -0.5: block start msg off, 1: cue novelty level1, 2: cue novelty level2, 3: cue novelty level3, 4: reward delivery, 5: hedonic rating display, 6: hedonic rating answer, 7: causal rating display, 8: causal rating answer, 9: Bayesian rating display, 10: Bayesian rating answer, 20: a short blank page display, -99:fail to do ratings in time limit, (-) when display off';
+% Event timing and type logging
+% Structure: [block#, trial#, trial_s#, session_time, block_time, event_type]
+HIST_event_info0=[]; % Will store all event timestamps and types
+
+% Event type codes documentation:
+%   0.5: block start message on
+%  -0.5: block start message off
+%   1: cue novelty level 1 displayed
+%   2: cue novelty level 2 displayed
+%   3: cue novelty level 3 (novel) displayed
+%   4: reward delivery
+%   5: hedonic rating display
+%   6: hedonic rating answer submitted
+%   7: causal rating display
+%   8: causal rating answer submitted
+%   9: Bayesian (triangular) rating display
+%  10: Bayesian rating answer submitted
+%  20: short blank page display
+% -99: failed to respond within time limit
+% Negative values: display off events (e.g., -1 = level 1 cue off)
+
+HIST_event_info_Tag{1,1}='row1 - block#';
+HIST_event_info_Tag{2,1}='row2 - trial#, 0 if outside of the trial';
+HIST_event_info_Tag{3,1}='row3 - trial_s#, 0 if outside of the trial_s';
+HIST_event_info_Tag{4,1}='row4 - event time in session';
+HIST_event_info_Tag{5,1}='row5 - event time in block';
+HIST_event_info_Tag{6,1}='row6 - event type (see codes above)';
 
 
 
 
-%% Seed Image Loading and Initialization
-% In the first session, initialize the image usage matrix, or load the matrix if it's a subsequent session.
+%% ========================================================================
+%% SECTION 16: SEED IMAGE LOADING AND INITIALIZATION
+%% ========================================================================
+% In the first session, initialize the image usage tracking matrix.
+% In subsequent sessions, load the existing matrix to track which images
+% have been used across all sessions (prevents image reuse).
 
 if(index_num==1)
     Tot_num_img=120; %Tot_block*tot_num_img_per_block;
@@ -244,8 +418,11 @@ question_set{1,1} = imread([seed_path '\tmp_good_infer.jpg']);
 question_set{1,2} = imread([seed_path '\tmp_bad_infer.jpg']);
 question_set{1,3} = imread([seed_path '\tmp_hedonic.jpg']);
 
-%% Scheduling Setup
-% Define frequency of image presentations per block
+%% ========================================================================
+%% SECTION 17: TASK SCHEDULE LOADING
+%% ========================================================================
+% Load the pre-generated schedule from event_random.m or given_event_made.m
+% This schedule determines which stimuli appear when and what rewards are delivered.
 img_present_freq=img_present_ratio/sum(img_present_ratio);
 
 ind_mat=[];     num_acc=0;
@@ -265,7 +442,10 @@ HIST_reward_case=case_seed0(randperm(Tot_block));
 task_file_name = [pwd '\results_save\' EXP_NAME '_' sprintf('task_schedule_session%d.mat',index_num)];
 load(task_file_name);
 
-%% Display initialization
+%% ========================================================================
+%% SECTION 18: PSYCHTOOLBOX DISPLAY INITIALIZATION
+%% ========================================================================
+% Initialize Psychtoolbox screen and prepare for stimulus presentation
 whichScreen = 0;
 wPtr  = Screen('OpenWindow',whichScreen);
 [screenWidth, screenHeight] = Screen('WindowSize', wPtr);
@@ -278,8 +458,10 @@ inc_0=white-black;
 HIST_key_press_button=ones(1,Tot_trial);
 HIST_key_press_sec=ones(1,Tot_trial);
 
-%% Starting Message
-% Display a message at the start of the experiment asking the participant if they are ready.
+%% ========================================================================
+%% SECTION 19: EXPERIMENT START
+%% ========================================================================
+% Display welcome message and wait for participant to begin
 Screen('TextSize',wPtr, text_size_default);
 DrawFormattedText(wPtr, 'Are you ready for the experiment?\n(Press any key to start)', 'center', 'center');
 Screen('Flip', wPtr);
@@ -289,11 +471,17 @@ KbWait; % temporarily disabled for test APR 21
 session_clock_start = GetSecs;
 WaitSecs(sec_scanner_ready);
 
-%% Block Loop
+%% ========================================================================
+%% SECTION 20: MAIN EXPERIMENTAL LOOP
+%% ========================================================================
+% Loop through each block, presenting stimuli, rewards, and collecting ratings
 img_set_all=cell(Tot_block,tot_num_img_per_block);
 for block=1:1:Tot_block % Loop through each block in the session
 
-    %% I. Stimulus Presentation Phase
+    %% --------------------------------------------------------------------
+    %% PHASE I: STIMULUS PRESENTATION
+    %% --------------------------------------------------------------------
+    % Present cues according to schedule, with jittered intervals
     % Start of block message
     Screen('FillRect',wPtr,BackgroundColor_block_intro);
     str_block_intro=sprintf('*** Now block %d starts. ***',block);
@@ -372,7 +560,10 @@ for block=1:1:Tot_block % Loop through each block in the session
             break;
         end
 
-        %% Reward Display Phase
+        %% --------------------------------------------------------------------
+        %% PHASE II: REWARD DISPLAY
+        %% --------------------------------------------------------------------
+        % Show reward outcome based on experimental condition
         Screen('FillRect',wPtr,BackgroundColor_Reward_page);
         if(HIST_reward_case(block,1)==1) % non-novelO:10, novelO:-50
             if(HIST_reward(block,trial)<0) % novel outcome
@@ -440,8 +631,13 @@ for block=1:1:Tot_block % Loop through each block in the session
         img_set_all{block,h+length(img_index_use)}=img0_set{block,ind_new(h)};
     end
 
-    %% III. Rating - type2
-    % This section manages the type 2 rating phase, displaying images and a rating scale to the participant.
+    %% --------------------------------------------------------------------
+    %% PHASE III: LINEAR RATING SCALES (Type 2)
+    %% --------------------------------------------------------------------
+    % Collect hedonic and causal attribution ratings using linear scales
+    % Participants rate each image on two dimensions:
+    % 1. Hedonic: How pleasant/unpleasant (-5 to +5)
+    % 2. Causal: How likely this cue caused the outcome (0 to 10)
 
     img_toshow_index=randperm(tot_num_img_per_block);
     xpos = round(screenWidth/2);    ypos = round(screenHeight/2);
@@ -593,8 +789,12 @@ for block=1:1:Tot_block % Loop through each block in the session
     end
 
     if(KEEP_PICTURE_OPT==1)
-        %% II. Rating - type1
-        % This section handles the type 1 rating phase, where participants rate images by placing points on a triangular grid.
+        %% --------------------------------------------------------------------
+        %% PHASE IV: TRIANGULAR BAYESIAN BETTING (Type 1)
+        %% --------------------------------------------------------------------
+        % Collect probability distributions over three images using triangular interface
+        % Participants allocate betting points across three images shown at triangle vertices
+        % Barycentric coordinates represent probability distribution (sums to 1)
 
         % Define points of a triangle for the rating display
         tri_pt=zeros(3,2); % edges
@@ -806,7 +1006,10 @@ for block=1:1:Tot_block % Loop through each block in the session
 end
 
 
-%% Ending message
+%% ========================================================================
+%% SECTION 21: EXPERIMENT COMPLETION AND DATA SAVING
+%% ========================================================================
+% Save all experimental data and display completion message
 str_end=sprintf('- Our experiments is over. Press any key to quit. -');
 DrawFormattedText(wPtr, str_end, 'center', 'center');
 Screen(wPtr, 'Flip');
